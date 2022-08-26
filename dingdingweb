@@ -1,0 +1,367 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import requests
+import re
+import json
+import os
+import re
+import time
+import random
+from websocket import create_connection
+import qrcode_terminal
+
+
+
+## 钉钉主程序
+class Ding():
+    def __init__(self):
+        self.ws = create_connection('wss://webalfa-cm10.dingtalk.com/long',header={'Upgrade': 'websocket', 'Connection': 'Upgrade'})
+        self.res = requests.session()
+        self.code = ''
+        self.qr_url = ''
+        self.app_key = '85A09F60A599F5E1867EAB915A8BB07F'
+        self.server_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36 OS(windows/10.0) Browser(chrome/84.0.4147.89) DingWeb/3.8.10 LANG/zh_CN"
+        self.client_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36"
+        self.ding_server_url = "https://im.dingtalk.com/"
+
+    @staticmethod
+    def mid():
+        return "".join(random.sample("abcdef0123456789", random.randint(8, 8))) + ' 0'
+
+    def generate_login_qrcode(self):
+        r = self.res.get('https://login.dingtalk.com/user/qrcode/generate.jsonp?callback=angular.callbacks._0')
+        html = re.findall('\((.*?)\)', r.text, re.S)[0]
+        callback = json.loads(html)
+        if callback['success'] == True:
+            self.code = callback['result']
+            self.qr_url = 'http://qr.dingtalk.com/action/login?code=' + self.code
+            qrcode_terminal.draw(self.qr_url, 3)
+            # callback['result']
+        else:
+            print('Error01:返回值为否')
+
+    def check_login_status(self):
+        um_data = {'data': '106!woxiangqiaoni', 'xa': 'dingding', 'xt': ''}
+        r = self.res.post('https://ynuf.aliapp.org/service/um.json', data=um_data)
+        um = r.json()
+        self.tn = um['tn']
+        self.um_id = um['id']
+        time.sleep(3)
+
+        url = 'https://login.dingtalk.com/user/qrcode/is_logged.jsonp'
+        params = {
+            'appKey': self.app_key,
+            'callback': None,
+            'pdmModel': 'Windows Unknown',
+            'pdmTitle': 'Windows Unknown Web',
+            'pdmToken': self.tn,
+            'qrcode': self.code
+        }
+        headers = {
+            'accept': '*/*',
+            'accept-encoding': 'gzip, deflate, br',
+            'accept-language': 'zh-CN,zh;q=0.9',
+            'referer': self.ding_server_url,
+            'sec-fetch-dest': 'script',
+            'sec-fetch-mode': 'no-cors',
+            'sec-fetch-site': 'same-site',
+            'user-agent': self.client_user_agent
+        }
+        while True:
+            result = self.res.get(url, params=params, headers=headers)
+            content = json.loads(re.findall('onJSONPCallback\((.*?)\);$', result.text, re.S)[0])
+            if content['success'] == True:
+                print("登陆成功")
+                break
+            time.sleep(2)
+
+        self.access_token = content['result']['accessToken']
+        self.app_key = content['result']['appKey']
+        self.tmp_code = content['result']['tmpCode']
+        self.openid = str(content['result']['openId'])
+        self.nick = content['result']['nick']
+        return True
+
+    def ws_connect(self, jsondata):
+
+        self.ws.send(json.dumps(jsondata))
+        recv = self.ws.recv()
+        return recv
+
+    def cus_ws_connect(self, ws,jsondata):
+
+        ws.send(json.dumps(jsondata))
+        recv = ws.recv()
+        return recv
+
+    def user_info(self, openid):
+        user_info = self.ws_connect({"lwp": "/r/Adaptor/UserMixI/getUserProfileExtensionByUid",
+                                     "headers": {"mid": self.mid()}, "body": [openid, None]})
+        return json.loads(user_info)
+
+    def initial(self):
+        headers = {
+            'accept': '*/*',
+            'accept-encoding': 'gzip, deflate, br',
+            'accept-language': 'zh-CN,zh;q=0.9',
+            'referer': self.ding_server_url,
+            'sec-fetch-dest': 'script',
+            'sec-fetch-mode': 'no-cors',
+            'sec-fetch-site': 'same-site',
+            'user-agent': self.server_user_agent
+        }
+
+        did = self.res.get(
+            'https://webalfa-cm10.dingtalk.com/setCookie?code={}&appkey={}&isSession=true&callback=__jp0'.format(
+                self.tmp_code, self.app_key), headers=headers).headers['set-cookie']
+        did = did.split('; ')[0].split('=')[1]
+        reg = {"lwp": "/reg", "headers": {"cache-header": "token app-key did ua vhost wv", "vhost": "WK",
+                                          "ua": self.server_user_agent, "app-key": self.app_key, "wv": "im:3,au:3,sy:4",
+                                          "mid": "61880001 0"}, "body": None}
+
+        sid = json.loads(self.ws_connect(reg))['headers']['sid']
+
+        ws_data = {
+            "lwp": "/subscribe",
+            "headers":
+                {
+                    "token": self.access_token,
+                    "sync": "0,0;0;0;",
+                    "set-ver": "191175777171",
+                    "mid": self.mid(),
+                    "ua": self.server_user_agent,
+                    "sid": sid,
+                    "did": did,
+                    'appkey': self.app_key
+                }
+        }
+        self.ws_connect(ws_data)
+
+        self.ws_connect({"lwp": "/r/IDLConversation/listNewest",
+                         "headers": {"mid": self.mid()}, "body": [1000]})
+
+        getState = json.loads(self.ws_connect({"lwp": "/r/Sync/getState", "headers": {"mid": self.mid()}, "body": [
+            {"pts": 0, "highPts": 0, "seq": 0, "timestamp": 0, "tooLong2Tag": ""}]}))
+        return True
+
+    def custom_initial(self,ws):
+        # headers = {
+        #     'accept': '*/*',
+        #     'accept-encoding': 'gzip, deflate, br',
+        #     'accept-language': 'zh-CN,zh;q=0.9',
+        #     'referer': self.ding_server_url,
+        #     'sec-fetch-dest': 'script',
+        #     'sec-fetch-mode': 'no-cors',
+        #     'sec-fetch-site': 'same-site',
+        #     'user-agent': self.server_user_agent
+        # }
+        #
+        # did = self.res.get(
+        #     'https://webalfa-cm10.dingtalk.com/setCookie?code={}&appkey={}&isSession=true&callback=__jp0'.format(
+        #         self.tmp_code, self.app_key), headers=headers).headers['set-cookie']
+        # did = did.split('; ')[0].split('=')[1]
+        reg = {"lwp": "/reg", "headers": {"cache-header": "token app-key did ua vhost wv", "vhost": "WK",
+                                          "ua": self.server_user_agent, "app-key": self.app_key, "wv": "im:3,au:3,sy:4",
+                                          "mid": self.mid()}, "body": None}
+
+        sid = json.loads(self.cus_ws_connect(ws,reg))['headers']['sid']
+
+        ws_data = {
+            "lwp": "/subscribe",
+            "headers":
+                {
+                    "token": self.access_token,
+                    "sync": "0,0;0;0;",
+                    "set-ver": "191175777171",
+                    "mid": self.mid(),
+                    "ua": self.server_user_agent,
+                    "sid": sid,
+                    'appkey': self.app_key
+                }
+        }
+        self.cus_ws_connect(ws,ws_data)
+
+        self.cus_ws_connect(ws,{"lwp": "/r/IDLConversation/listNewest",
+                         "headers": {"mid": self.mid()}, "body": [1000]})
+
+        getState = json.loads(self.cus_ws_connect(ws,{"lwp": "/r/Sync/getState", "headers": {"mid": self.mid()}, "body": [
+            {"pts": 0, "highPts": 0, "seq": 0, "timestamp": 0, "tooLong2Tag": ""}]}))
+        return True
+
+    def conversation(self):
+        list_newest_conversation = self.ws_connect(self.ws_connect({
+            "lwp": "/r/IDLConversation/listNewest",
+            "headers": {
+                "mid": self.mid()
+            },
+            "body": [1000]
+        }
+        ))
+
+        list_newest_conversation_data = json.loads(list_newest_conversation)
+        if "code" not in list_newest_conversation_data or list_newest_conversation_data['code'] != 200:
+            print(list_newest_conversation_data['reason']) if "reason" in list_newest_conversation_data else print(
+                "登陆出现异常")
+            return False
+
+        all_data = list_newest_conversation_data['body']
+        data = {}
+        for v in all_data:
+            print(v)
+            title = v['baseConversation']['title']
+            ### 去掉群号名称为空的群组或者消息体
+            if title.strip() == '':
+                continue
+            data[title] = v['baseConversation']['conversationId']
+        return data
+
+    def new_message(self, conv_id,name,cid_dict_new):
+
+        message_list = []
+        list_message = self.ws_connect({
+            "lwp": "/r/IDLMessage/listMessages",
+            "headers": {
+                "mid": self.mid()
+            },
+            "body": [conv_id, False, int(time.time() * 1000), 5]
+        })
+
+        # jsondata = {
+        #     "lwp": "/r/IDLMessage/listMessages",
+        #     "headers": {
+        #         "mid": self.mid()
+        #     },
+        #     "body": [conv_id, False, int(time.time() * 1000), 10]
+        # }
+        # print('run once:',conv_id)
+        # ws = create_connection('wss://webalfa-cm10.dingtalk.com/long',
+        #                             header={'Upgrade': 'websocket', 'Connection': 'Upgrade'})
+        # self.custom_initial(ws)
+        # ws.send(json.dumps(jsondata))
+        # list_message = ws.recv()
+        # ws.close()
+        body_data = json.loads(list_message)['body']
+        resp_dict = {}
+        for cid in cid_dict_new.values():
+            resp_dict[cid] = []
+        # print('<<<<<<<')
+        for v in body_data:
+            message = []
+
+            if "baseMessage" in v:
+
+                if "textContent" in v['baseMessage']['content']:
+                    try:
+                        message.append((f"text:" + v['baseMessage']['content']['textContent']['text']))
+                    except:pass
+
+                elif "attachments" in v['baseMessage']['content']:
+
+                    if "extension" in v['baseMessage']['content']["attachments"][-1] and 'replyContent' in \
+                            v['baseMessage']['content']["attachments"][-1]['extension']:
+                        try:
+                            message.append((
+                            "quoto:" + v['baseMessage']['content']['attachments'][-1]['extension'].get('replyContent', '')))
+                        except:pass
+                    else:
+                        try:
+                            message.append(("share:" + v['baseMessage']['content']['attachments'][-1]['extension'].get("title","") + " url: " +v['baseMessage']['content']['attachments'][-1]['extension'].get("source_url", "")))
+                        except:pass
+                else:
+                    if "picBytes" in v['baseMessage']['content']["photoContent"]:
+                        try:
+                            message.append(("pic:" + v['baseMessage']['content']["photoContent"].get('picBytes', '')))
+                        except:pass
+                    else:
+                        try:
+                            message.append((
+                            "emoj:" + v['baseMessage']['content']["photoContent"]['extension'].get('e_id', '') + " " +
+                            v['baseMessage']['content']["photoContent"]['mediaId']))
+                        except:pass
+            else:
+                continue
+            dict_ = {'message':message,'timestamp':v['baseMessage']['createdAt'],'openId':v['baseMessage']['openIdEx']['openId']}
+            nowcid = v['baseMessage'].get("conversationId", "")
+            if nowcid in cid_dict_new.values():
+                resp_dict[nowcid].insert(0,dict_)
+        # for i in message_list:
+        #     try:
+        #         i['name'] = self.getUserInfo(i['openId'])['body']['cardUserModel']['name']
+        #     except BaseException as e:
+        #         i['name'] = ''
+
+        # message_list.reverse()
+        return resp_dict
+    def getUserInfo(self, openId):
+        # ws = create_connection('wss://webalfa-cm10.dingtalk.com/long',
+        #                        header={'Upgrade': 'websocket', 'Connection': 'Upgrade'})
+        # jsondata = {"lwp": "/r/Adaptor/UserMixI/getUserProfileExtensionByUid",
+        #                       "headers": {"mid": self.mid()}, "body": [openId, None]}
+        # ws.send(json.dumps(jsondata))
+        # list_message = self.ws.recv()
+
+        a = self.ws_connect({"lwp": "/r/Adaptor/UserMixI/getUserProfileExtensionByUid",
+                              "headers": {"mid": self.mid()}, "body": [openId, None]})
+        return json.loads(a)
+    def send_message(self, conv_id, text):
+        self.ws_connect({
+            "lwp": "/r/IDLSend/send",
+            "headers": {"mid": self.mid()},
+            "body": [{
+                "uuid": str(int(time.time() * 1000000)),
+                "conversationId": conv_id,
+                "type": 1,
+                "creatorType": 1,
+                "content": {
+                    "contentType": 1,
+                    "textContent": {
+                        "text": text
+                    },
+                    "atOpenIds": {}
+                },
+                "nickName": self.nick
+            }]
+        })
+        return True
+
+    def run(self):
+        self.generate_login_qrcode()
+        self.check_login_status()
+        self.initial()
+
+
+if __name__ == "__main__":
+    ding = Ding()
+    ding.run()
+    cid_dict = ding.conversation()
+    print(cid_dict)
+    print('>>>>>>')
+    monitor_list = ['售后技术运维','运维平台告警群']
+    # monitor_list = ['售后技术运维']
+    cid_dict_new = {}
+    name_dict_new = {}
+    for key,val in cid_dict.items():
+        if key in monitor_list:
+            cid_dict_new[key] = val
+            name_dict_new[val] = key
+    current_time = int(time.time() * 1000)
+    last_msg = {}
+    last_time = {}
+    while True:
+        for name,cid in cid_dict_new.items():
+
+            time_now = int(time.time() * 1000)
+            data_dict = ding.new_message(cid,name,cid_dict_new)
+            for cidnew,items in data_dict.items():
+                if items:
+                    for v in items:
+                        if v.get('timestamp',0) > last_time.get(cidnew,current_time):
+                            print(f"来自<{name_dict_new[cidnew]}>新消息>>>", v)
+
+                    print({name_dict_new[cidnew]}, '最后一条消息：', items[-1])
+                    last_time[cidnew] = items[-1].get('timestamp',0)
+
+            time.sleep(0.2)
+        print('*'*30)
+        time.sleep(2)

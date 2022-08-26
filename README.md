@@ -1,4 +1,5 @@
 # dingtalkmsgsync
+由于钉钉机器人接口没有收集聊天记录的原因，所以从网页班钉钉汝州，扫码登录个人钉钉，gongxi 大佬的websocket方式截取
 钉钉聊天消息同步数据库进行统计分析，支持多群监控，参考https://github.com/gongxi-cn-ln-dl/DingTalk，https://github.com/Macfee/DingDing-Web
 
 ## 运行效果结果
